@@ -14,5 +14,10 @@ The following code structures and methods are currently reserved or unimplemente
 * **Advanced Operations:** `getCurrentUserId`, `deleteAnalyzedRecords`, `removeFromFavorites`, `insertProductToDb`.
 * **Rewards & Products State:** `rewardById`, `selectedReward`, `favoriteProducts`, `setCurrentProduct`.
 
-## 📱 Installation
+## Installation
 Download the `app-debug.apk` attached to the GitHub Release to test.
+
+## Supabase Configuration
+* **Project ID**: `actshpmtaaqxmlofbwrv`
+* **Dashboard URL**: [EcoWise Supabase Dashboard](https://supabase.com/dashboard/project/actshpmtaaqxmlofbwrv)
+* **SQL Editor**: [Supabase SQL Editor](https://supabase.com/dashboard/project/actshpmtaaqxmlofbwrv/sql/new)
