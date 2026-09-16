@@ -6,26 +6,30 @@ class UserService {
     private val tableName = "user_table"
 
     suspend fun fetchUserFromSupabase(email: String): UserRemoteDto? {
+        val cleanEmail = email.trim().lowercase()
         return try {
             SupabaseClient.client
                 .from(tableName)
                 .select {
-                    filter { eq("email", email) }
+                    filter { eq("email", cleanEmail) }
                 }
-                .decodeSingleOrNull<UserRemoteDto>()
+                .decodeList<UserRemoteDto>()
+                .firstOrNull()
         } catch (e: Exception) {
             e.printStackTrace()
             null
         }
     }
 
-    suspend fun upsertUserToSupabase(user: UserRemoteDto) {
-        try {
+    suspend fun upsertUserToSupabase(user: UserRemoteDto): Boolean {
+        return try {
             SupabaseClient.client
                 .from(tableName)
                 .upsert(user)
+            true
         } catch (e: Exception) {
             e.printStackTrace()
+            false
         }
     }
 }

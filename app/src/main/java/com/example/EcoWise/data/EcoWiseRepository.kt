@@ -86,15 +86,16 @@ object EcoWiseRepository {
     }
 
     suspend fun signUpUser(id: String, fullName: String, email: String, password: String, isGoogle: Boolean): Boolean = withContext(Dispatchers.IO) {
+        val normalizedEmail = email.trim().lowercase()
         return@withContext try {
             // Check if user already exists in Supabase
-            val existingRemote = userService.fetchUserFromSupabase(email)
+            val existingRemote = userService.fetchUserFromSupabase(normalizedEmail)
             if (existingRemote != null) {
                 return@withContext false // Account already exists
             }
             
             // Also check local DB for extra safety
-            val existingLocal = userDao?.getUserByEmail(email)
+            val existingLocal = userDao?.getUserByEmail(normalizedEmail)
             if (existingLocal != null) {
                 return@withContext false
             }
@@ -106,8 +107,8 @@ object EcoWiseRepository {
             _currentUserIdFlow.value = id
             val userEntity = UserEntity(
                 id = id,
-                fullName = fullName,
-                email = email,
+                fullName = fullName.trim(),
+                email = normalizedEmail,
                 password = password,
                 profilePictureUrl = null,
                 isGoogleAccount = isGoogle,
@@ -115,10 +116,10 @@ object EcoWiseRepository {
                 productsAnalysed = 0,
                 challengesCompleted = 0
             )
-            // Save locally
+            // Save locally and sync to Supabase
             saveUserToDb(userEntity)
             
-            updateUserInfo(fullName, email)
+            updateUserInfo(userEntity.fullName, normalizedEmail)
             _userStats.value = UserEcoStats() // Reset stats for new user
             
             // Load fresh challenges and rewards for new user
@@ -133,54 +134,128 @@ object EcoWiseRepository {
     }
 
     suspend fun signInUser(email: String, password: String): UserEntity? = withContext(Dispatchers.IO) {
-        // Strict Sign-In: Must exist in Supabase and password must match
+        val normalizedEmail = email.trim().lowercase()
+
+        // 1. Fetch remote user from Supabase
         val remoteUser = try {
-            userService.fetchUserFromSupabase(email)
+            userService.fetchUserFromSupabase(normalizedEmail)
         } catch (e: Exception) {
             e.printStackTrace()
             null
         }
-        
-        if (remoteUser != null && remoteUser.password == password) {
-            // Important: Clear previous session state before setting new user
-            clearSession()
 
-            currentUserId = remoteUser.id
-            _currentUserIdFlow.value = remoteUser.id
-            val userEntity = UserEntity(
-                id = remoteUser.id,
-                fullName = remoteUser.fullName,
-                email = remoteUser.email,
-                password = remoteUser.password,
-                profilePictureUrl = remoteUser.profilePictureUrl,
-                isGoogleAccount = remoteUser.isGoogleAccount,
-                ecoPoints = remoteUser.ecoPoints,
-                productsAnalysed = remoteUser.productsAnalysed,
-                challengesCompleted = remoteUser.challengesCompleted
-            )
+        // 2. Fetch local user from Room DB as candidate / fallback
+        val localUser = try {
+            userDao?.getUserByEmail(normalizedEmail)
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
+        }
+
+        // 3. Authenticate against remote or local credentials
+        var authenticatedUser: UserEntity? = null
+
+        if (remoteUser != null) {
+            if (remoteUser.password.isNotEmpty() && remoteUser.password == password) {
+                // Direct remote authentication match
+                authenticatedUser = UserEntity(
+                    id = remoteUser.id,
+                    fullName = remoteUser.fullName,
+                    email = remoteUser.email,
+                    password = remoteUser.password,
+                    profilePictureUrl = remoteUser.profilePictureUrl,
+                    isGoogleAccount = remoteUser.isGoogleAccount,
+                    ecoPoints = remoteUser.ecoPoints,
+                    productsAnalysed = remoteUser.productsAnalysed,
+                    challengesCompleted = remoteUser.challengesCompleted
+                )
+            } else if (remoteUser.password.isEmpty() && localUser != null && localUser.password == password) {
+                // Legacy healing: Remote user had empty password, but local password matched
+                authenticatedUser = UserEntity(
+                    id = remoteUser.id,
+                    fullName = remoteUser.fullName,
+                    email = remoteUser.email,
+                    password = password,
+                    profilePictureUrl = remoteUser.profilePictureUrl,
+                    isGoogleAccount = remoteUser.isGoogleAccount,
+                    ecoPoints = remoteUser.ecoPoints,
+                    productsAnalysed = remoteUser.productsAnalysed,
+                    challengesCompleted = remoteUser.challengesCompleted
+                )
+                // Self-heal remote password
+                try {
+                    userService.upsertUserToSupabase(
+                        UserRemoteDto(
+                            id = remoteUser.id,
+                            fullName = remoteUser.fullName,
+                            email = remoteUser.email,
+                            password = password,
+                            profilePictureUrl = remoteUser.profilePictureUrl,
+                            isGoogleAccount = remoteUser.isGoogleAccount,
+                            ecoPoints = remoteUser.ecoPoints,
+                            productsAnalysed = remoteUser.productsAnalysed,
+                            challengesCompleted = remoteUser.challengesCompleted
+                        )
+                    )
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+        }
+
+        // Fallback: If remote lookup failed (table uninitialized, offline, etc.) but local user exists
+        if (authenticatedUser == null && localUser != null && localUser.password == password) {
+            authenticatedUser = localUser
+            // Attempt to sync local user to Supabase
             try {
-                userDao?.insertUser(userEntity)
+                userService.upsertUserToSupabase(
+                    UserRemoteDto(
+                        id = localUser.id,
+                        fullName = localUser.fullName,
+                        email = localUser.email,
+                        password = localUser.password,
+                        profilePictureUrl = localUser.profilePictureUrl,
+                        isGoogleAccount = localUser.isGoogleAccount,
+                        ecoPoints = localUser.ecoPoints,
+                        productsAnalysed = localUser.productsAnalysed,
+                        challengesCompleted = localUser.challengesCompleted
+                    )
+                )
             } catch (e: Exception) {
                 e.printStackTrace()
             }
-            updateUserInfo(userEntity.fullName, userEntity.email)
-            
-            // Restore session state from remote
+        }
+
+        if (authenticatedUser != null) {
+            clearSession()
+
+            currentUserId = authenticatedUser.id
+            _currentUserIdFlow.value = authenticatedUser.id
+
+            try {
+                userDao?.insertUser(authenticatedUser)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+            updateUserInfo(authenticatedUser.fullName, authenticatedUser.email)
+
+            // Restore session state
             _userStats.value = UserEcoStats(
-                ecoPoints = userEntity.ecoPoints,
-                productsAnalysed = userEntity.productsAnalysed,
-                challengesCompleted = userEntity.challengesCompleted
+                ecoPoints = authenticatedUser.ecoPoints,
+                productsAnalysed = authenticatedUser.productsAnalysed,
+                challengesCompleted = authenticatedUser.challengesCompleted
             )
-            
-            // Sync all user data (products, rewards, progress) after login
+
+            // Sync user data after login
             syncFromCloud()
-            
+
             // Ensure local state is loaded even if sync fails
             loadLocalChallenges()
             loadLocalRewards()
 
-            return@withContext userEntity
+            return@withContext authenticatedUser
         }
+
         return@withContext null
     }
 
@@ -564,10 +639,16 @@ object EcoWiseRepository {
 
     private suspend fun syncUserToCloudAndDb(stats: UserEcoStats) {
         val userId = currentUserId ?: return
+        val currentPassword = try {
+            userDao?.getUserByEmail(_userEmail.value)?.password ?: ""
+        } catch (e: Exception) {
+            ""
+        }
         val updatedUser = UserEntity(
             id = userId,
             fullName = _userName.value,
             email = _userEmail.value,
+            password = currentPassword,
             profilePictureUrl = null,
             isGoogleAccount = false, // This might need to be tracked more carefully
             ecoPoints = stats.ecoPoints,
@@ -583,6 +664,7 @@ object EcoWiseRepository {
             id = updatedUser.id,
             fullName = updatedUser.fullName,
             email = updatedUser.email,
+            password = currentPassword,
             profilePictureUrl = updatedUser.profilePictureUrl,
             isGoogleAccount = updatedUser.isGoogleAccount,
             ecoPoints = updatedUser.ecoPoints,
@@ -952,6 +1034,7 @@ object EcoWiseRepository {
                     id = user.id,
                     fullName = user.fullName,
                     email = user.email,
+                    password = user.password,
                     profilePictureUrl = user.profilePictureUrl,
                     isGoogleAccount = user.isGoogleAccount,
                     ecoPoints = user.ecoPoints,
@@ -1082,11 +1165,14 @@ object EcoWiseRepository {
                     productsAnalysed = remoteUser.productsAnalysed,
                     challengesCompleted = remoteUser.challengesCompleted
                 )
-                // Also update local UserEntity
+                // Also update local UserEntity while preserving local password if remote is empty
+                val localExisting = userDao?.getUserByEmail(_userEmail.value)
+                val preservedPassword = remoteUser.password.ifEmpty { localExisting?.password ?: "" }
                 val localUser = UserEntity(
                     id = remoteUser.id,
                     fullName = remoteUser.fullName,
                     email = remoteUser.email,
+                    password = preservedPassword,
                     profilePictureUrl = remoteUser.profilePictureUrl,
                     isGoogleAccount = remoteUser.isGoogleAccount,
                     ecoPoints = remoteUser.ecoPoints,

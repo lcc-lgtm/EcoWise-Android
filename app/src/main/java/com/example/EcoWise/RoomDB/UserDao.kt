@@ -12,7 +12,7 @@ interface UserDao {
     @Query("SELECT * FROM user_table WHERE id = :userId LIMIT 1")
     fun getUser(userId: String): Flow<UserEntity?>
 
-    @Query("SELECT * FROM user_table WHERE email = :email LIMIT 1")
+    @Query("SELECT * FROM user_table WHERE LOWER(email) = LOWER(:email) LIMIT 1")
     suspend fun getUserByEmail(email: String): UserEntity?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)

@@ -503,32 +503,60 @@ fun UserLogin(
                     onClickChange = {
                         val currentUser = validateAndSubmit()
 
-                        if(currentUser != null){
-                            val realEmail = if (email.contains("@")) email.trim() else "${email.trim()}@gmail.com"
-                            
+                        if (currentUser != null) {
+                            val normalizedEmail = (if (email.contains("@")) email.trim() else "${email.trim()}@gmail.com").lowercase()
+
                             scope.launch {
                                 try {
-                                    val result = if (isRegister) {
-                                        viewModel.signUp(currentUser.id, currentUser.fullName, realEmail, password, false)
-                                    } else {
-                                        viewModel.signIn(realEmail, password) != null
-                                    }
+                                    if (isRegister) {
+                                        val signUpSuccess = viewModel.signUp(
+                                            currentUser.id,
+                                            currentUser.fullName,
+                                            normalizedEmail,
+                                            password,
+                                            false
+                                        )
+                                        if (signUpSuccess) {
+                                            Toast.makeText(
+                                                currentSigninRegisterContext,
+                                                "Successfully Registered a New Account",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
 
-                                    if (result) {
-                                        Toast.makeText(
-                                            currentSigninRegisterContext,
-                                            "Successfully " + if (isRegister) "Registered a New Account" else "Signed In",
-                                            Toast.LENGTH_SHORT
-                                        ).show()
-
-                                        navController.navigate(route = "EcoWise Home Screen/${currentUser.fullName}") {
-                                            popUpTo("EcoWise Login") {
-                                                inclusive = true
+                                            navController.navigate(route = "EcoWise Home Screen/${currentUser.fullName}") {
+                                                popUpTo("EcoWise Login") {
+                                                    inclusive = true
+                                                }
                                             }
+                                        } else {
+                                            Toast.makeText(
+                                                currentSigninRegisterContext,
+                                                "Account already exists!",
+                                                Toast.LENGTH_LONG
+                                            ).show()
                                         }
                                     } else {
-                                        val errorMsg = if (isRegister) "Account already exists!" else "Invalid email or password!"
-                                        Toast.makeText(currentSigninRegisterContext, errorMsg, Toast.LENGTH_LONG).show()
+                                        val signedInUser = viewModel.signIn(normalizedEmail, password)
+                                        if (signedInUser != null) {
+                                            Toast.makeText(
+                                                currentSigninRegisterContext,
+                                                "Successfully Signed In",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+
+                                            val displayName = signedInUser.fullName.ifBlank { "EcoWise User" }
+                                            navController.navigate(route = "EcoWise Home Screen/$displayName") {
+                                                popUpTo("EcoWise Login") {
+                                                    inclusive = true
+                                                }
+                                            }
+                                        } else {
+                                            Toast.makeText(
+                                                currentSigninRegisterContext,
+                                                "Invalid email or password!",
+                                                Toast.LENGTH_LONG
+                                            ).show()
+                                        }
                                     }
                                 } catch (e: Exception) {
                                     Toast.makeText(
@@ -590,8 +618,13 @@ fun UserLogin(
 
                             scope.launch {
                                 try {
-                                    // Use a placeholder password for Google accounts
-                                    viewModel.signUp(googleUser.id, googleUser.fullName, googleUser.email, "GOOGLE_AUTH", true)
+                                    val signUpResult = viewModel.signUp(googleUser.id, googleUser.fullName, googleUser.email, "GOOGLE_AUTH", true)
+                                    val signedIn = if (signUpResult) {
+                                        googleUser.fullName
+                                    } else {
+                                        val existing = viewModel.signIn(googleUser.email, "GOOGLE_AUTH")
+                                        existing?.fullName ?: googleUser.fullName
+                                    }
 
                                     Toast.makeText(
                                         ecoWiseLoginScreenContext,
@@ -599,7 +632,7 @@ fun UserLogin(
                                         Toast.LENGTH_SHORT
                                     ).show()
 
-                                    navController.navigate(route = "EcoWise Home Screen/${googleUser.fullName}") {
+                                    navController.navigate(route = "EcoWise Home Screen/$signedIn") {
                                         popUpTo("EcoWise Login") {
                                             inclusive = true
                                         }
